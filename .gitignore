@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.tsbuildinfo
+*.log
+.qoder-sites/
+.qoder-sites.json
+
+# Qoder Sites 本地站点绑定，含云端项目信息，不随仓库发布
+*.qoder.site
+
+# 本地 UI 自检截图（跑 dev/cdp-check.mjs 生成）
+dev/shots/

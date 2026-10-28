@@ -1,0 +1,279 @@
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { ArrowUpRight, LoaderCircle, MessageSquare, Search, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+
+import { Button } from "@/components/ui/button";
+import {
+  apiErrorMessage,
+  deleteAdminComment,
+  fetchAdminComments,
+  fetchAdminPosts,
+} from "@/lib/api";
+import { formatCompactDate, formatRelative } from "@/lib/format";
+import { useDocumentTitle } from "@/hooks/use-document-title";
+import type { PostComment, PostSummary } from "@/lib/types";
+
+type State = "loading" | "ready" | "error";
+
+export function AdminCommentsPage() {
+  useDocumentTitle("留言 · 写作台");
+  const [comments, setComments] = useState<PostComment[]>([]);
+  const [posts, setPosts] = useState<PostSummary[]>([]);
+  const [state, setState] = useState<State>("loading");
+  const [error, setError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+  const [query, setQuery] = useState("");
+  const [postFilter, setPostFilter] = useState("all");
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setState("loading");
+    Promise.all([fetchAdminComments(controller.signal), fetchAdminPosts(controller.signal)])
+      .then(([commentItems, postItems]) => {
+        if (controller.signal.aborted) return;
+        setComments(commentItems);
+        setPosts(postItems);
+        setState("ready");
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (controller.signal.aborted) return;
+        setError(apiErrorMessage(err));
+        setState("error");
+      });
+    return () => controller.abort();
+  }, [reloadKey]);
+
+  const postMap = useMemo(() => new Map(posts.map((post) => [post.id, post])), [posts]);
+
+  const stats = useMemo(() => {
+    const uniquePosts = new Set(comments.map((comment) => comment.post_id)).size;
+    const today = new Date();
+    const todayKey = `${today.getFullYear()}-${today.getMonth()}-${today.getDate()}`;
+    const todayCount = comments.filter((comment) => {
+      const date = new Date(comment.created_at);
+      if (Number.isNaN(date.getTime())) return false;
+      return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}` === todayKey;
+    }).length;
+    return { total: comments.length, uniquePosts, todayCount };
+  }, [comments]);
+
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return comments.filter((comment) => {
+      if (postFilter !== "all" && comment.post_id !== postFilter) return false;
+      if (!needle) return true;
+      const postTitle = postMap.get(comment.post_id)?.title ?? "";
+      return [comment.nickname, comment.content, postTitle]
+        .join(" ")
+        .toLowerCase()
+        .includes(needle);
+    });
+  }, [comments, postFilter, postMap, query]);
+
+  async function handleDelete(id: string) {
+    if (deleting) return;
+    setDeleting(id);
+    try {
+      await deleteAdminComment(id);
+      setComments((previous) => previous.filter((comment) => comment.id !== id));
+      setConfirming(null);
+      toast.success("留言已删除。");
+    } catch (err) {
+      toast.error(apiErrorMessage(err));
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  return (
+    <div>
+      <div>
+        <p className="text-[10px] tracking-[0.3em] text-ink-faint">CONVERSATION</p>
+        <h1 className="mt-1.5 font-serif text-3xl tracking-tight text-ink">留言</h1>
+        <p className="mt-2 text-sm text-ink-soft">
+          读者写下的每一句话都在这里。读到广告或不当内容，可以直接删除。
+        </p>
+      </div>
+
+      <div className="mt-7 grid gap-px border border-line bg-line sm:grid-cols-3">
+        <Stat label="全部留言" value={state === "ready" ? String(stats.total) : "—"} />
+        <Stat label="涉及文章" value={state === "ready" ? String(stats.uniquePosts) : "—"} />
+        <Stat label="今天新增" value={state === "ready" ? String(stats.todayCount) : "—"} />
+      </div>
+
+      <div className="mt-6 border border-line bg-[#fbfaf6]">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
+          <div className="relative w-full max-w-xs">
+            <Search
+              className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-ink-faint"
+              aria-hidden="true"
+            />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索昵称、内容或文章…"
+              aria-label="搜索留言"
+              className="h-9 w-full border border-line bg-paper px-3 pl-8 text-xs text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-cinnabar"
+            />
+          </div>
+
+          <div className="flex items-center gap-3">
+            <select
+              value={postFilter}
+              onChange={(event) => setPostFilter(event.target.value)}
+              aria-label="按文章筛选"
+              className="h-9 max-w-[13rem] border border-line bg-paper px-2 text-xs text-ink-soft outline-none focus:border-cinnabar"
+            >
+              <option value="all">全部文章</option>
+              {posts.map((post) => (
+                <option key={post.id} value={post.id}>
+                  {post.title}
+                </option>
+              ))}
+            </select>
+            <span className="whitespace-nowrap text-[11px] text-ink-faint">
+              {state === "ready" ? `${visible.length} 条` : "载入中"}
+            </span>
+          </div>
+        </div>
+
+        {state === "loading" && (
+          <div className="flex items-center justify-center gap-2 px-5 py-16 text-sm text-ink-faint">
+            <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+            正在读取留言…
+          </div>
+        )}
+
+        {state === "error" && (
+          <div className="px-5 py-10 text-center">
+            <p className="text-sm text-cinnabar">{error}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setReloadKey((value) => value + 1)}
+              className="mt-4 rounded-none border-line bg-transparent"
+            >
+              重新载入
+            </Button>
+          </div>
+        )}
+
+        {state === "ready" && comments.length === 0 && (
+          <div className="px-5 py-16 text-center">
+            <span className="seal mx-auto size-10 text-lg" aria-hidden="true">
+              言
+            </span>
+            <p className="mt-4 font-serif text-xl text-ink">还没有留言</p>
+            <p className="mt-2 text-sm text-ink-faint">
+              文章发布后，读者的第一句话会出现在这里。
+            </p>
+          </div>
+        )}
+
+        {state === "ready" && comments.length > 0 && visible.length === 0 && (
+          <p className="px-5 py-12 text-center text-sm text-ink-faint">
+            没有符合条件的留言。
+          </p>
+        )}
+
+        {state === "ready" && visible.length > 0 && (
+          <ul className="divide-y divide-line">
+            {visible.map((comment) => {
+              const post = postMap.get(comment.post_id);
+              return (
+                <li key={comment.id} className="px-4 py-5 sm:px-5">
+                  <div className="flex gap-3.5">
+                    <span
+                      aria-hidden="true"
+                      className="flex size-9 shrink-0 items-center justify-center border border-line bg-paper-deep font-serif text-sm text-ink-soft"
+                    >
+                      {(comment.nickname || "读").slice(0, 1)}
+                    </span>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="text-sm font-medium text-ink">{comment.nickname}</span>
+                        <span className="text-[11px] text-ink-faint" title={formatCompactDate(comment.created_at)}>
+                          {formatRelative(comment.created_at)}
+                        </span>
+                        {post ? (
+                          <Link
+                            to={`/posts/${post.slug}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] text-cinnabar/80 transition-colors hover:text-cinnabar"
+                          >
+                            《{post.title}》
+                            <ArrowUpRight className="size-3" aria-hidden="true" />
+                          </Link>
+                        ) : (
+                          <span className="text-[11px] text-ink-faint">文章已删除</span>
+                        )}
+                      </div>
+
+                      <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-ink-soft">
+                        {comment.content}
+                      </p>
+
+                      <div className="mt-2.5 flex items-center justify-end gap-1">
+                        {confirming === comment.id ? (
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={deleting === comment.id}
+                              onClick={() => void handleDelete(comment.id)}
+                              className="rounded-none px-2 text-xs text-destructive hover:bg-destructive/10"
+                            >
+                              {deleting === comment.id ? "删除中…" : "确认删除"}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setConfirming(null)}
+                              className="rounded-none px-2 text-xs text-ink-faint"
+                            >
+                              取消
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setConfirming(comment.id)}
+                            aria-label={`删除 ${comment.nickname} 的留言`}
+                            className="rounded-none px-2 text-ink-faint hover:bg-paper-deep hover:text-destructive"
+                          >
+                            <Trash2 className="size-3.5" aria-hidden="true" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      <p className="mt-4 flex items-center gap-1.5 text-[11px] text-ink-faint">
+        <MessageSquare className="size-3.5" aria-hidden="true" />
+        读者无需登录即可留言；删除留言无法恢复。
+      </p>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-[#fbfaf6] px-5 py-4">
+      <p className="text-[10px] tracking-[0.2em] text-ink-faint">{label}</p>
+      <p className="mt-1.5 font-serif text-2xl text-ink">{value}</p>
+    </div>
+  );
+}
